@@ -10,6 +10,7 @@ frontend/build/
 # Environment variables
 .env
 *.env
+!.env.example
 backend/.env
 frontend/.env
 
