@@ -1,8 +1,8 @@
 import axios from "axios";
 
 // Base API client configured with fallback to port 4000
-const API_BASE = import.meta.env.VITE_API_URL || "http://localhost:4000";
-const DEFAULT_API_KEY = import.meta.env.VITE_API_KEY || "log_secret_api_key_123";
+const API_BASE = import.meta.env.VITE_API_URL || "https://cloudlog-multi-tenant-saas-log-aggregator.onrender.com";
+const DEFAULT_API_KEY = import.meta.env.VITE_API_KEY;
 
 const client = axios.create({
   baseURL: `${API_BASE}/api/v1`,
