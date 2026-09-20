@@ -63,10 +63,15 @@ export default function App() {
   const [logsSecCounter, setLogsSecCounter] = useState(0);
   const [ingestRate, setIngestRate] = useState(0);
   const isPausedRef = useRef(isPaused);
+  const currentUserRef = useRef(currentUser);
 
   useEffect(() => {
     isPausedRef.current = isPaused;
   }, [isPaused]);
+
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
 
   // Socket Connection & Event Listeners
   useEffect(() => {
@@ -79,10 +84,17 @@ export default function App() {
     }
 
     function onNewLog(newLog) {
+      const activeUser = currentUserRef.current;
+      // Filter incoming real-time socket logs by tenantId if user is logged in
+      if (activeUser?.tenantId && newLog.tenantId && newLog.tenantId !== activeUser.tenantId) {
+        return;
+      }
+
       setLogsSecCounter((prev) => prev + 1);
 
       if (!isPausedRef.current) {
         setLogs((prevLogs) => {
+          if (newLog._id && prevLogs.some((l) => l._id === newLog._id)) return prevLogs;
           const updated = [newLog, ...prevLogs];
           return updated.slice(0, 500); // cap terminal memory buffer at 500 logs
         });
@@ -91,6 +103,10 @@ export default function App() {
     }
 
     function onAlertTriggered(alertData) {
+      const activeUser = currentUserRef.current;
+      if (activeUser?.tenantId && alertData.tenantId && alertData.tenantId !== activeUser.tenantId) {
+        return;
+      }
       setAlertToast(alertData);
       setTimeout(() => setAlertToast(null), 6000);
       setTriggeredHistory((prev) => [alertData, ...prev]);

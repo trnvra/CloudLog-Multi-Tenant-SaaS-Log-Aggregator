@@ -8,6 +8,8 @@ export default function LogChart({ logs = [] }) {
     const now = Date.now();
     const intervalMs = (60 * 60 * 1000) / totalBars;
 
+    const hasRealLogs = logs && logs.length > 0;
+
     for (let i = 0; i < totalBars; i++) {
       const bucketTime = new Date(now - (totalBars - 1 - i) * intervalMs);
       
@@ -15,26 +17,23 @@ export default function LogChart({ logs = [] }) {
       let warnCount = 0;
       let errorCount = 0;
 
-      logs.forEach((log) => {
-        const logTime = new Date(log.timestamp || log.createdAt || now).getTime();
-        const bucketStart = bucketTime.getTime() - intervalMs / 2;
-        const bucketEnd = bucketTime.getTime() + intervalMs / 2;
+      if (hasRealLogs) {
+        logs.forEach((log) => {
+          const logTime = new Date(log.timestamp || log.createdAt || now).getTime();
+          const bucketStart = bucketTime.getTime() - intervalMs / 2;
+          const bucketEnd = bucketTime.getTime() + intervalMs / 2;
 
-        if (logTime >= bucketStart && logTime <= bucketEnd) {
-          if (log.level === "FATAL" || log.level === "ERROR") errorCount++;
-          else if (log.level === "WARN") warnCount++;
-          else infoCount++;
-        }
-      });
+          if (logTime >= bucketStart && logTime <= bucketEnd) {
+            if (log.level === "FATAL" || log.level === "ERROR") errorCount++;
+            else if (log.level === "WARN") warnCount++;
+            else infoCount++;
+          }
+        });
+      }
 
-      // Default mock baseline fill so the visual chart always matches the screenshot
-      const baseInfo = Math.floor(Math.random() * 8) + 12;
-      const baseWarn = Math.random() > 0.4 ? Math.floor(Math.random() * 3) + 1 : 0;
-      const baseErr = Math.random() > 0.7 ? Math.floor(Math.random() * 2) + 1 : 0;
-
-      const finalInfo = infoCount > 0 ? infoCount * 3 : baseInfo;
-      const finalWarn = warnCount > 0 ? warnCount * 3 : baseWarn;
-      const finalErr = errorCount > 0 ? errorCount * 4 : baseErr;
+      const finalInfo = infoCount;
+      const finalWarn = warnCount;
+      const finalErr = errorCount;
       const total = finalInfo + finalWarn + finalErr;
 
       result.push({
@@ -51,8 +50,11 @@ export default function LogChart({ logs = [] }) {
   }, [logs]);
 
   const maxBucketTotal = useMemo(() => {
-    return Math.max(...buckets.map((b) => b.total), 30);
+    const maxVal = Math.max(...buckets.map((b) => b.total), 0);
+    return maxVal > 0 ? maxVal : 10;
   }, [buckets]);
+
+  const hasLogs = logs && logs.length > 0;
 
   return (
     <div className="bg-[#0B0F17] border border-slate-800 rounded-xl p-4 mb-4 shadow-xl font-mono text-xs">
@@ -86,9 +88,15 @@ export default function LogChart({ logs = [] }) {
       </div>
 
       {/* Stacked Bar Chart Display */}
-      <div className="h-20 sm:h-24 flex items-end justify-between gap-1 pt-2 pb-1 px-1 bg-[#06090F] rounded-lg border border-slate-800/60 overflow-hidden">
+      <div className="h-20 sm:h-24 flex items-end justify-between gap-1 pt-2 pb-1 px-1 bg-[#06090F] rounded-lg border border-slate-800/60 overflow-hidden relative">
+        {!hasLogs && (
+          <div className="absolute inset-0 flex items-center justify-center bg-slate-950/40 text-slate-500 text-xs font-mono pointer-events-none">
+            No log events ingested yet for this tenant. Use "Simulate Logs" to generate traffic.
+          </div>
+        )}
+
         {buckets.map((b) => {
-          const heightPct = Math.max(16, Math.min(100, (b.total / maxBucketTotal) * 100));
+          const heightPct = b.total > 0 ? Math.max(10, Math.min(100, (b.total / maxBucketTotal) * 100)) : 4;
           const infoPct = b.total > 0 ? (b.info / b.total) * 100 : 100;
           const warnPct = b.total > 0 ? (b.warn / b.total) * 100 : 0;
           const errPct = b.total > 0 ? (b.error / b.total) * 100 : 0;
@@ -96,7 +104,9 @@ export default function LogChart({ logs = [] }) {
           return (
             <div
               key={b.id}
-              className="flex-1 flex flex-col justify-end group relative cursor-pointer rounded-t-xs overflow-hidden transition-all hover:opacity-80"
+              className={`flex-1 flex flex-col justify-end group relative cursor-pointer rounded-t-xs overflow-hidden transition-all ${
+                b.total > 0 ? "hover:opacity-80" : "opacity-30"
+              }`}
               style={{ height: `${heightPct}%` }}
               title={`Time: ${b.timeLabel}\nINFO: ${b.info} | WARN: ${b.warn} | FATAL/ERR: ${b.error}`}
             >
@@ -114,7 +124,7 @@ export default function LogChart({ logs = [] }) {
                 />
               )}
               <div
-                className="w-full bg-emerald-500 transition-all"
+                className={`w-full transition-all ${b.total > 0 ? "bg-emerald-500" : "bg-slate-800"}`}
                 style={{ height: `${infoPct}%` }}
               />
             </div>
@@ -124,12 +134,12 @@ export default function LogChart({ logs = [] }) {
 
       {/* X-Axis Timestamps */}
       <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono mt-2 px-1">
-        <span>13:40:00</span>
-        <span>13:55:00</span>
-        <span>14:10:00</span>
-        <span className="text-slate-400 font-bold">14:25:00 (Now)</span>
+        <span>60m ago</span>
+        <span>45m ago</span>
+        <span>30m ago</span>
+        <span>15m ago</span>
+        <span className="text-slate-400 font-bold">Now</span>
       </div>
     </div>
   );
 }
-
