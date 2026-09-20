@@ -84,12 +84,6 @@ export default function App() {
     }
 
     function onNewLog(newLog) {
-      const activeUser = currentUserRef.current;
-      // Filter incoming real-time socket logs by tenantId if user is logged in
-      if (activeUser?.tenantId && newLog.tenantId && newLog.tenantId !== activeUser.tenantId) {
-        return;
-      }
-
       setLogsSecCounter((prev) => prev + 1);
 
       if (!isPausedRef.current) {
@@ -103,10 +97,6 @@ export default function App() {
     }
 
     function onAlertTriggered(alertData) {
-      const activeUser = currentUserRef.current;
-      if (activeUser?.tenantId && alertData.tenantId && alertData.tenantId !== activeUser.tenantId) {
-        return;
-      }
       setAlertToast(alertData);
       setTimeout(() => setAlertToast(null), 6000);
       setTriggeredHistory((prev) => [alertData, ...prev]);

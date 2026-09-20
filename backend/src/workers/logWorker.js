@@ -109,10 +109,10 @@ const evaluateAlerts = async (logs) => {
   try {
     const tenantIds = [...new Set(logs.map((l) => l.tenantId || "default-tenant"))];
 
-    // Fetch active rules for these tenants
+    // Fetch active rules for these tenants OR default-tenant
     const rules = await AlertRule.find({
       $or: [{ isActive: true }, { enabled: true }],
-      tenantId: { $in: tenantIds },
+      tenantId: { $in: [...tenantIds, "default-tenant"] },
     }).lean();
 
     if (rules.length === 0) return;
@@ -125,7 +125,10 @@ const evaluateAlerts = async (logs) => {
         const ruleLevel = (rule.level || "ALL").toUpperCase();
         const ruleKeyword = rule.keyword || "";
 
-        const tenantMatch = rule.tenantId === logTenant;
+        const tenantMatch =
+          rule.tenantId === logTenant ||
+          rule.tenantId === "default-tenant" ||
+          logTenant === "default-tenant";
 
         const serviceMatch =
           ruleService === "*" ||
@@ -143,7 +146,7 @@ const evaluateAlerts = async (logs) => {
 
         if (tenantMatch && serviceMatch && levelMatch && keywordMatch) {
           const ruleName = rule.name || "Alert Rule";
-          const threshold = Math.max(1, rule.thresholdCount || 5);
+          const threshold = Math.max(1, rule.thresholdCount || 1);
 
           // 1. Increment trigger count in DB and get updated count
           const updatedRule = await AlertRule.findByIdAndUpdate(
@@ -153,66 +156,59 @@ const evaluateAlerts = async (logs) => {
           ).catch(() => null);
 
           const currentCount = updatedRule ? updatedRule.triggerCount : (rule.triggerCount || 0) + 1;
-          rule.triggerCount = currentCount;
 
-          // 2. Check if occurrence count has reached/exceeded threshold (e.g. 5x, 10x, 15x...)
-          const isThresholdReached = currentCount % threshold === 0;
+          // 2. Fire alert notification immediately on match
+          console.log(
+            `[Alert] 🚨 Alert matched! Rule "${ruleName}" for service [${log.serviceName}] (${log.level}). Dispatching alert!`
+          );
 
-          if (isThresholdReached) {
-            console.log(
-              `[Alert] 🚨 Threshold hit! Rule "${ruleName}" matched ${currentCount}/${threshold} times. Dispatching alert error!`
-            );
+          // 3. Save fired alert to MongoDB
+          AlertHistory.create({
+            tenantId: logTenant,
+            ruleId: rule._id,
+            ruleName,
+            serviceName: log.serviceName,
+            keyword: ruleKeyword,
+            level: log.level,
+            message: log.message,
+            webhookUrl: rule.webhookUrl,
+            firedAt: new Date(),
+          }).catch((err) => console.warn("[AlertHistory] Save error:", err.message));
 
-            // 3. Save fired alert to MongoDB
-            AlertHistory.create({
+          // 4. Emit Socket.io real-time alert event
+          try {
+            getIO().emit("alert-triggered", {
               tenantId: logTenant,
-              ruleId: rule._id,
-              ruleName,
-              serviceName: log.serviceName,
-              keyword: ruleKeyword,
-              level: log.level,
-              message: `[THRESHOLD REACHED (${currentCount}/${threshold}x)] ${log.message}`,
-              webhookUrl: rule.webhookUrl,
-              firedAt: new Date(),
-            }).catch((err) => console.warn("[AlertHistory] Save error:", err.message));
+              rule: {
+                id: rule._id,
+                name: ruleName,
+                service: ruleService,
+                level: ruleLevel,
+                keyword: ruleKeyword,
+                webhookUrl: rule.webhookUrl,
+                triggerCount: currentCount,
+                thresholdCount: threshold,
+              },
+              log: {
+                serviceName: log.serviceName,
+                level: log.level,
+                message: log.message,
+                timestamp: log.timestamp,
+              },
+              firedAt: new Date().toISOString(),
+            });
+            console.log(
+              `[Alert] 🚨 Real-time alert emitted for "${ruleName}" (${log.serviceName} - ${log.level})`
+            );
+          } catch (err) {
+            console.warn("[Alert] Socket emit skipped:", err.message);
+          }
 
-            // 4. Emit Socket.io real-time alert event
-            try {
-              getIO().emit("alert-triggered", {
-                tenantId: logTenant,
-                rule: {
-                  id: rule._id,
-                  name: ruleName,
-                  service: ruleService,
-                  level: ruleLevel,
-                  keyword: ruleKeyword,
-                  webhookUrl: rule.webhookUrl,
-                  triggerCount: currentCount,
-                  thresholdCount: threshold,
-                },
-                log: {
-                  serviceName: log.serviceName,
-                  level: log.level,
-                  message: log.message,
-                  timestamp: log.timestamp,
-                },
-                firedAt: new Date().toISOString(),
-              });
-              console.log(
-                `[Alert] 🚨 Real-time alert emitted for "${ruleName}" (${currentCount}/${threshold} matches)`
-              );
-            } catch (err) {
-              console.warn("[Alert] Socket emit skipped:", err.message);
-            }
-
-            // 5. Dispatch HTTP Webhook to Discord / Slack / Generic URL
+          // 5. Dispatch HTTP Webhook to Discord / Slack / Generic URL
+          if (rule.webhookUrl) {
             dispatchWebhook(rule, log, currentCount, threshold).catch((err) => {
               console.error(`[Alert] Webhook failed → ${rule.webhookUrl}:`, err.message);
             });
-          } else {
-            console.log(
-              `[Alert] ℹ️ Match recorded for "${ruleName}" (${currentCount}/${threshold} matches towards threshold)`
-            );
           }
         }
       }
