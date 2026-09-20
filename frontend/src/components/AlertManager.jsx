@@ -111,7 +111,9 @@ export default function AlertManager({
     const finalServiceName =
       selectedServiceOption === "CUSTOM"
         ? customServiceName.trim()
-        : selectedServiceOption.replace(" * (All Services)", "*").replace(" (All Services)", "").trim();
+        : selectedServiceOption.includes("All Services") || selectedServiceOption === "*"
+        ? "*"
+        : selectedServiceOption.trim();
 
     // Determine final Keyword value
     const finalKeyword =
@@ -131,10 +133,10 @@ export default function AlertManager({
     try {
       await client.post("/alerts", {
         name: ruleName.trim() || "Alert Rule",
-        service: finalServiceName === "* (All Services)" ? "*" : finalServiceName,
+        service: finalServiceName,
         level: selectedLevelOption,
         keyword: finalKeyword,
-        thresholdCount: Math.max(1, Number(thresholdCount) || 5),
+        thresholdCount: Math.max(1, Number(thresholdCount) || 1),
         webhookUrl: webhookUrl.trim(),
         isActive: true,
       });

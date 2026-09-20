@@ -109,10 +109,9 @@ const evaluateAlerts = async (logs) => {
   try {
     const tenantIds = [...new Set(logs.map((l) => l.tenantId || "default-tenant"))];
 
-    // Fetch active rules for these tenants OR default-tenant
+    // Fetch all active rules
     const rules = await AlertRule.find({
-      $or: [{ isActive: true }, { enabled: true }],
-      tenantId: { $in: [...tenantIds, "default-tenant"] },
+      $or: [{ isActive: true }, { enabled: true }, { isActive: { $exists: false } }],
     }).lean();
 
     if (rules.length === 0) return;
@@ -121,27 +120,37 @@ const evaluateAlerts = async (logs) => {
       const logTenant = log.tenantId || "default-tenant";
 
       for (const rule of rules) {
-        const ruleService = rule.service || rule.serviceName || "ALL";
-        const ruleLevel = (rule.level || "ALL").toUpperCase();
-        const ruleKeyword = rule.keyword || "";
+        const rawService = (rule.service || rule.serviceName || "ALL").trim();
+        const ruleLevel = (rule.level || "ALL").trim().toUpperCase();
+        const ruleKeyword = (rule.keyword || "").trim();
 
+        // 1. Tenant match (matches tenantId or default-tenant)
         const tenantMatch =
-          rule.tenantId === logTenant ||
+          !rule.tenantId ||
           rule.tenantId === "default-tenant" ||
-          logTenant === "default-tenant";
+          logTenant === "default-tenant" ||
+          rule.tenantId === logTenant;
 
+        // 2. Service match (*, ALL, * (All Services), or exact service name match)
         const serviceMatch =
-          ruleService === "*" ||
-          ruleService === "ALL" ||
-          ruleService === log.serviceName;
+          rawService === "*" ||
+          rawService === "ALL" ||
+          rawService.includes("*") ||
+          rawService.toLowerCase().includes("all services") ||
+          rawService.toLowerCase() === log.serviceName.toLowerCase();
 
+        // 3. Level match (ALL, *, or exact log.level)
         const levelMatch =
           ruleLevel === "ALL" ||
+          ruleLevel === "*" ||
           ruleLevel === log.level;
 
+        // 4. Keyword match (empty, ALL, *, matching log.level, or substring in log.message)
         const keywordMatch =
           !ruleKeyword ||
-          ruleKeyword.trim() === "" ||
+          ruleKeyword === "*" ||
+          ruleKeyword.toUpperCase() === "ALL" ||
+          ruleKeyword.toUpperCase() === log.level ||
           (log.message && log.message.toLowerCase().includes(ruleKeyword.toLowerCase()));
 
         if (tenantMatch && serviceMatch && levelMatch && keywordMatch) {
@@ -157,58 +166,62 @@ const evaluateAlerts = async (logs) => {
 
           const currentCount = updatedRule ? updatedRule.triggerCount : (rule.triggerCount || 0) + 1;
 
-          // 2. Fire alert notification immediately on match
           console.log(
-            `[Alert] 🚨 Alert matched! Rule "${ruleName}" for service [${log.serviceName}] (${log.level}). Dispatching alert!`
+            `[Alert] 🚨 Match #${currentCount}/${threshold} for rule "${ruleName}" on service [${log.serviceName}] (${log.level})`
           );
 
-          // 3. Save fired alert to MongoDB
-          AlertHistory.create({
-            tenantId: logTenant,
-            ruleId: rule._id,
-            ruleName,
-            serviceName: log.serviceName,
-            keyword: ruleKeyword,
-            level: log.level,
-            message: log.message,
-            webhookUrl: rule.webhookUrl,
-            firedAt: new Date(),
-          }).catch((err) => console.warn("[AlertHistory] Save error:", err.message));
+          // 2. Fire alert notification on match
+          const isThresholdReached = threshold <= 1 || currentCount % threshold === 0 || currentCount === 1;
 
-          // 4. Emit Socket.io real-time alert event
-          try {
-            getIO().emit("alert-triggered", {
+          if (isThresholdReached) {
+            // 3. Save fired alert to MongoDB
+            AlertHistory.create({
               tenantId: logTenant,
-              rule: {
-                id: rule._id,
-                name: ruleName,
-                service: ruleService,
-                level: ruleLevel,
-                keyword: ruleKeyword,
-                webhookUrl: rule.webhookUrl,
-                triggerCount: currentCount,
-                thresholdCount: threshold,
-              },
-              log: {
-                serviceName: log.serviceName,
-                level: log.level,
-                message: log.message,
-                timestamp: log.timestamp,
-              },
-              firedAt: new Date().toISOString(),
-            });
-            console.log(
-              `[Alert] 🚨 Real-time alert emitted for "${ruleName}" (${log.serviceName} - ${log.level})`
-            );
-          } catch (err) {
-            console.warn("[Alert] Socket emit skipped:", err.message);
-          }
+              ruleId: rule._id,
+              ruleName,
+              serviceName: log.serviceName,
+              keyword: ruleKeyword,
+              level: log.level,
+              message: log.message,
+              webhookUrl: rule.webhookUrl,
+              firedAt: new Date(),
+            }).catch((err) => console.warn("[AlertHistory] Save error:", err.message));
 
-          // 5. Dispatch HTTP Webhook to Discord / Slack / Generic URL
-          if (rule.webhookUrl) {
-            dispatchWebhook(rule, log, currentCount, threshold).catch((err) => {
-              console.error(`[Alert] Webhook failed → ${rule.webhookUrl}:`, err.message);
-            });
+            // 4. Emit Socket.io real-time alert event
+            try {
+              getIO().emit("alert-triggered", {
+                tenantId: logTenant,
+                rule: {
+                  id: rule._id,
+                  name: ruleName,
+                  service: rawService,
+                  level: ruleLevel,
+                  keyword: ruleKeyword,
+                  webhookUrl: rule.webhookUrl,
+                  triggerCount: currentCount,
+                  thresholdCount: threshold,
+                },
+                log: {
+                  serviceName: log.serviceName,
+                  level: log.level,
+                  message: log.message,
+                  timestamp: log.timestamp,
+                },
+                firedAt: new Date().toISOString(),
+              });
+              console.log(
+                `[Alert] 🚨 Real-time alert emitted for "${ruleName}" (${log.serviceName} - ${log.level})`
+              );
+            } catch (err) {
+              console.warn("[Alert] Socket emit skipped:", err.message);
+            }
+
+            // 5. Dispatch HTTP Webhook to Discord / Slack / Generic URL
+            if (rule.webhookUrl) {
+              dispatchWebhook(rule, log, currentCount, threshold).catch((err) => {
+                console.error(`[Alert] Webhook failed → ${rule.webhookUrl}:`, err.message);
+              });
+            }
           }
         }
       }
